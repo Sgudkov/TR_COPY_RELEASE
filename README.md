@@ -15,7 +15,7 @@
 
 ![alt text](https://github.com/Sgudkov/TR_COPY_RELEASE/blob/main/GRID.jpg).
 
-> Your can overview only your requests.
+> You can overview only your requests.
 
 #### 3. Buttons "Copy and release" and "Copy".
 
