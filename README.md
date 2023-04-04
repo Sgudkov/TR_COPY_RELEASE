@@ -2,8 +2,7 @@
 
 ### This example allow you to create transport of copies automatically
 
-#### Sometimes need to move development to another system without workbench TR release.
-#### Here is useful tool to do it automatically instead of do it yourself.
+#### Sometimes need to move development to another system without workbench TR release. Here is useful tool to do it automatically instead of do it yourself.
 
 
 >Source code [here](https://github.com/Sgudkov/TR_COPY_RELEASE/blob/main/TR_COPY.abap).
