@@ -20,9 +20,14 @@
 #### 3. Buttons "Copy and release" and "Copy".
 
 - [x] "Copy" 
-> Allow you to copy selected transport request with all including objects and included tasks.
-> Notice that if task doesn't contain objects with type 'R3TR' this task will not copy.
+> Allow you to copy selected transport request with selected from request tasks.
+> All selected task release.
 > Description of new "Copy" obtain from copied request.
 
 - [x] "Copy and release" 
 > After create copy TR, release it without any check.
+
+
+- [x] "Copy, release, import"
+> The copied and released request is imported into the next system across the landscape (see. method get_target_system).
+> Each 5 seconds after request released start FM TR_READ_GLOBAL_INFO_OF_REQUEST to check import status of request and refresh it on ALV.
