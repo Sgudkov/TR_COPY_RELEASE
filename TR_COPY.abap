@@ -1,4 +1,4 @@
-TYPE-POOLS: trwbo, rs, trsel, abap, icon.
+TYPE-POOLS: trwbo, rs, trsel, abap, icon, stms, ctslg.
 
 CLASS: gcl_alv DEFINITION DEFERRED.
 
@@ -827,7 +827,7 @@ CLASS gcl_alv IMPLEMENTATION.
 
   ENDMETHOD.                    "create_fcat
 ENDCLASS.                    "gcl_alv IMPLEMENTATION
-
+ 
 SELECTION-SCREEN BEGIN OF BLOCK b1 WITH FRAME.
 
 PARAMETERS: p_trkorr TYPE trkorr.
@@ -841,3 +841,16 @@ START-OF-SELECTION.
       iv_trkorr = p_trkorr.
 
   go_alv->run( ).
+  
+  
+
+
+MODULE status_0100 OUTPUT.
+  SET PF-STATUS 'PF0100'.
+  SET TITLEBAR 'T0100'.
+  go_alv->show_alv( ).
+ENDMODULE.                 " STATUS_0100  OUTPUT
+
+MODULE exit_command_0100 INPUT.
+  LEAVE TO SCREEN 0.
+ENDMODULE.                 " EXIT_COMMAND_0100  INPUT  
