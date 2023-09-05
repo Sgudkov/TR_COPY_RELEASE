@@ -18,6 +18,7 @@ CLASS gcl_alv DEFINITION.
         cop TYPE string VALUE 'COP',
         cpr TYPE string VALUE 'CPR',
         cri TYPE string VALUE 'CRI',
+        irc TYPE string VALUE 'IRC',
       END OF   mcs_usr_cmd.
 
     DATA: mo_grid      TYPE REF TO cl_gui_alv_grid,
@@ -26,8 +27,8 @@ CLASS gcl_alv DEFINITION.
     METHODS:
       constructor
         IMPORTING
-          iv_trkorr TYPE trkorr
-          iv_test   TYPE boolean,
+          iv_trkorr       TYPE trkorr
+          iv_release_task TYPE boolean,
       show_alv,
       run,
       handle_hotspot FOR EVENT hotspot_click
@@ -53,19 +54,27 @@ CLASS gcl_alv DEFINITION.
 
     TYPES BEGIN OF mts_data.
             INCLUDE TYPE trwbo_request_header.
-    TYPES cpr          TYPE icon_d.
-    TYPES cop          TYPE icon_d.
-    TYPES cri          TYPE icon_d.
-    TYPES iconrc       TYPE zed_avap_iconrc.
-    TYPES t_new_trkorr TYPE trkorrs.
+    TYPES cpr     TYPE icon_d.
+    TYPES cop     TYPE icon_d.
+    TYPES cri     TYPE icon_d.
+    TYPES irc     TYPE icon_d.
+    TYPES new_trkorr TYPE trkorr.
     TYPES END OF mts_data.
 
     TYPES mtt_data TYPE STANDARD TABLE OF mts_data WITH DEFAULT KEY.
 
-    DATA: mt_data     TYPE mtt_data,
-          mv_trkorr   TYPE trkorr,
-          mt_requests TYPE trwbo_request_headers,
-          mv_target   TYPE tr_target.
+    TYPES BEGIN OF mts_requests.
+            INCLUDE TYPE trwbo_request_header.
+    TYPES t_trkorr TYPE trkorrs.
+    TYPES END OF mts_requests.
+
+    TYPES mtt_requests TYPE STANDARD TABLE OF mts_requests WITH DEFAULT KEY.
+
+    DATA: mt_data         TYPE mtt_data,
+          mv_release_task TYPE boolean,
+          mv_trkorr       TYPE trkorr,
+          mt_requests     TYPE mtt_requests,
+          mv_target       TYPE tr_target.
 
     DATA: mo_timer TYPE REF TO cl_gui_timer.
 
@@ -88,12 +97,15 @@ CLASS gcl_alv DEFINITION.
           iv_rowid TYPE int4
         EXPORTING
           ev_new_trkorr TYPE trkorr,
-      release
-        IMPORTING
-          iv_trkorr TYPE trkorr,
       copy_release_import
         IMPORTING
           iv_rowid TYPE int4,
+      display_stms
+        IMPORTING
+          iv_rowid TYPE int4,
+      release
+        IMPORTING
+          iv_trkorr TYPE trkorr,
       get_trkorrs,
       create_fcat
        IMPORTING
@@ -118,7 +130,8 @@ ENDCLASS.                    "gcl_alv DEFINITION
 CLASS gcl_alv IMPLEMENTATION.
 
   METHOD constructor.
-    mv_trkorr = iv_trkorr. 
+    mv_trkorr = iv_trkorr.
+    mv_release_task = iv_release_task.
 
     mv_target = me->get_target_system( ).
 
@@ -132,11 +145,9 @@ CLASS gcl_alv IMPLEMENTATION.
 * Check import queue status every 5 seconds
 * Update screen
 
-    DATA: ls_settings   TYPE ctslg_settings,
-          ls_cofiles    TYPE ctslg_cofile,
-          lv_rc         TYPE i,
-          lv_count      TYPE i,
-          lv_unchecked  TYPE boolean VALUE 'X'.
+    DATA: ls_settings TYPE ctslg_settings,
+          ls_cofiles  TYPE ctslg_cofile,
+          lv_restart  TYPE boolean.
 
     FIELD-SYMBOLS: <ls_data>      TYPE mts_data,
                    <ls_trkorr>    TYPE trkorr,
@@ -146,41 +157,33 @@ CLASS gcl_alv IMPLEMENTATION.
     APPEND INITIAL LINE TO ls_settings-systems ASSIGNING <ls_syname>.
     <ls_syname>-name = mv_target.
 
-    LOOP AT mt_data ASSIGNING <ls_data> WHERE t_new_trkorr IS NOT INITIAL.
+    LOOP AT mt_data ASSIGNING <ls_data> WHERE new_trkorr IS NOT INITIAL.
 
-      CLEAR lv_rc.
+      CALL FUNCTION 'TR_READ_GLOBAL_INFO_OF_REQUEST'
+        EXPORTING
+          iv_trkorr   = <ls_data>-new_trkorr
+          is_settings = ls_settings
+        IMPORTING
+          es_cofile   = ls_cofiles.
 
-      LOOP AT <ls_data>-t_new_trkorr ASSIGNING <ls_trkorr>.
-        CALL FUNCTION 'TR_READ_GLOBAL_INFO_OF_REQUEST'
-          EXPORTING
-            iv_trkorr   = <ls_trkorr>
-            is_settings = ls_settings
-          IMPORTING
-            es_cofile   = ls_cofiles.
+      IF ls_cofiles-imported IS INITIAL.
+        lv_restart = abap_true.
+      ENDIF.
 
-        IF ls_cofiles-imported IS INITIAL.
-          CLEAR lv_unchecked.
-        ENDIF.
+      READ TABLE ls_cofiles-systems ASSIGNING <ls_system_rc> INDEX 1.
+      CHECK sy-subrc = 0.
 
-        READ TABLE ls_cofiles-systems ASSIGNING <ls_system_rc> INDEX 1.
-        CHECK sy-subrc = 0.
-
-        lv_rc = lv_rc + <ls_system_rc>-rc.
-      ENDLOOP.
-
-      lv_count = LINES( <ls_data>-t_new_trkorr ) * 4.
-
-      IF lv_count = lv_rc.
-        <ls_data>-iconrc = icon_led_yellow.
-      ELSEIF lv_count < lv_rc.
-        <ls_data>-iconrc = icon_led_red.
+      IF <ls_system_rc>-rc = 4.
+        <ls_data>-irc = icon_led_yellow.
+      ELSEIF <ls_system_rc>-rc = 8.
+        <ls_data>-irc = icon_led_red.
       ELSE.
-        <ls_data>-iconrc = icon_led_green.
+        <ls_data>-irc = icon_led_green.
       ENDIF.
 
     ENDLOOP.
 
-    IF lv_unchecked IS INITIAL.
+    IF lv_restart IS NOT INITIAL.
       mo_timer->cancel( ).
       mo_timer->run( ).
     ENDIF.
@@ -204,16 +207,29 @@ CLASS gcl_alv IMPLEMENTATION.
     ASSIGN COMPONENT e_column-fieldname OF STRUCTURE <ls_data> TO <lv_value>.
     CHECK sy-subrc = 0.
 
-    IF e_column-fieldname = 'TRKORR'.
+    CASE e_column-fieldname.
+      WHEN 'TRKORR'.
 
-      APPEND INITIAL LINE TO lt_request ASSIGNING <ls_request>.
-      <ls_request>-trkorr = <lv_value>.
+        APPEND INITIAL LINE TO lt_request ASSIGNING <ls_request>.
+        <ls_request>-trkorr = <lv_value>.
 
-      CALL FUNCTION 'TR_DISPLAY_REQUESTS'
-        EXPORTING
-          it_request_numbers = lt_request.
+        CALL FUNCTION 'TR_DISPLAY_REQUESTS'
+          EXPORTING
+            it_request_numbers = lt_request.
 
-    ENDIF.
+      WHEN 'IRC'.
+
+        CALL FUNCTION 'TR_LOG_OVERVIEW_REQUEST'
+          EXPORTING
+            iv_trkorr        = <ls_data>-new_trkorr
+            iv_target_system = mv_target
+          EXCEPTIONS
+            e_wrong_call     = 1
+            OTHERS           = 2.
+
+
+
+    ENDCASE.
 
 
   ENDMETHOD.                    "on_double_click
@@ -239,10 +255,87 @@ CLASS gcl_alv IMPLEMENTATION.
         me->copy_and_release( es_row_no-row_id ).
       WHEN  mcs_usr_cmd-cri.
         me->copy_release_import( es_row_no-row_id ).
+*      WHEN  mcs_usr_cmd-irc.
+*        me->display_stms( es_row_no-row_id ).
     ENDCASE.
 
   ENDMETHOD.                    "handle_hotspot
 
+  METHOD display_stms.
+
+    DATA: lt_bdcdata TYPE STANDARD TABLE OF bdcdata,
+          ls_bdcdata TYPE bdcdata,
+          ls_options TYPE ctu_params,
+          lt_msgbdc TYPE STANDARD TABLE OF bdcmsgcoll,
+          lv_rc     TYPE i.
+
+    FIELD-SYMBOLS: <ls_data>    TYPE mts_data,
+                   <ls_request> TYPE mts_requests.
+
+    DEFINE bdc_dynpro.
+      clear ls_bdcdata.
+      ls_bdcdata-program = &1.
+      ls_bdcdata-dynpro = &2.
+      ls_bdcdata-dynbegin = abap_true.
+      append ls_bdcdata to lt_bdcdata.
+    END-OF-DEFINITION.
+
+    DEFINE bdc_data.
+      clear ls_bdcdata.
+      ls_bdcdata-fnam = &1.
+      ls_bdcdata-fval = &2.
+      append ls_bdcdata to lt_bdcdata.
+    END-OF-DEFINITION.
+
+
+    bdc_dynpro: 'SAPLTMSU' '0100'.
+    bdc_data:   'BDC_CURSOR'        'WTMSU-SYSNAM',
+                'BDC_OKCODE'        '=IMPO'.
+
+    bdc_dynpro: 'SAPMSSY0' '0120'.
+    bdc_data:   'BDC_CURSOR'        '09/06',
+                'BDC_OKCODE'        '=PICK'.
+
+    bdc_dynpro: 'SAPMSSY0' '0120'.
+    bdc_data:   'BDC_CURSOR'        '09/18',
+                'BDC_OKCODE'        '=FILT'.
+
+    bdc_dynpro: 'SAPLTMSU_IQ' '0504'.
+    bdc_data:   'BDC_CURSOR'        'SO_TRKOR-LOW',
+                'BDC_OKCODE'        '=%002'.
+
+    bdc_dynpro: 'SAPLALDB' '3000'.
+    bdc_data:   'BDC_OKCODE'        '=CLIP'.
+
+    bdc_dynpro: 'SAPLALDB' '3000'.
+    bdc_data: 'BDC_OKCODE'        '=ACPT'.
+
+
+    bdc_dynpro: 'SAPLTMSU_IQ' '0504'.
+    bdc_data:   'BDC_OKCODE'        '=OKAY'.
+
+    ls_options-dismode = 'E'.
+*    ls_options-updmode = 'S'.
+
+    READ TABLE mt_data ASSIGNING <ls_data> INDEX iv_rowid.
+    CHECK sy-subrc = 0.
+
+    READ TABLE mt_requests ASSIGNING <ls_request>
+      WITH KEY trkorr = <ls_data>-trkorr.
+    CHECK sy-subrc = 0.
+
+    cl_gui_frontend_services=>clipboard_export(
+      IMPORTING
+        data = <ls_request>-t_trkorr
+      CHANGING
+        rc   = lv_rc
+    ).
+
+    CALL TRANSACTION 'STMS' USING lt_bdcdata
+              OPTIONS FROM ls_options
+     MESSAGES INTO lt_msgbdc.
+
+  ENDMETHOD.                    "display_stms
 
   METHOD copy_and_release.
 
@@ -254,7 +347,7 @@ CLASS gcl_alv IMPLEMENTATION.
       IMPORTING
         ev_new_trkorr = lv_trkorr
      ).
- 
+
     CHECK lv_trkorr IS NOT INITIAL.
 
     me->release( lv_trkorr ).
@@ -432,6 +525,7 @@ CLASS gcl_alv IMPLEMENTATION.
     DATA: lv_trkorr  TYPE trkorr,
           lt_clinets TYPE stms_clients.
 
+    FIELD-SYMBOLS: <ls_data> TYPE mts_data.
 
     me->copy(
       EXPORTING
@@ -439,7 +533,7 @@ CLASS gcl_alv IMPLEMENTATION.
       IMPORTING
         ev_new_trkorr = lv_trkorr
      ).
- 
+
     CHECK lv_trkorr IS NOT INITIAL.
 
     me->release( lv_trkorr ).
@@ -457,6 +551,17 @@ CLASS gcl_alv IMPLEMENTATION.
       MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
               WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
     ENDIF.
+
+    IF sy-subrc = 1.
+      RETURN.
+    ENDIF.
+
+    READ TABLE mt_data ASSIGNING <ls_data> INDEX iv_rowid.
+    IF sy-subrc = 0.
+      <ls_data>-irc = icon_led_inactive.
+    ENDIF.
+
+    mo_grid->refresh_table_display( i_soft_refresh = abap_true ).
 
     "Set timer to check import queue status every 5 seconds
     mo_timer->interval = 5.
@@ -506,9 +611,10 @@ CLASS gcl_alv IMPLEMENTATION.
           ls_new_trkorr TYPE trwbo_request_header,
           lt_check_msg  TYPE ctsgerrmsgs.
 
-    FIELD-SYMBOLS: <ls_data>    TYPE mts_data,
-                   <ls_request> TYPE trwbo_request_header,
-                   <ls_req>     TYPE mts_req.
+    FIELD-SYMBOLS: <ls_data>     TYPE mts_data,
+                   <ls_request>  TYPE mts_requests,
+                   <ls_req>      TYPE mts_req,
+                   <ls_new_attr> TYPE e070a.
 
 * 1. Create copy request
 * 2. Copy task to new copies tasks
@@ -582,8 +688,7 @@ CLASS gcl_alv IMPLEMENTATION.
     ENDIF.
 
     CHECK lt_check_msg IS INITIAL.
-	
-	"FM ZABAP_TR_REQUEST_MODIFY copy of TR_REQUEST_MODIFY where deleted perform "send_popup"
+
 
     "Create transport copies
     CALL FUNCTION 'ZABAP_TR_REQUEST_MODIFY'
@@ -611,9 +716,10 @@ CLASS gcl_alv IMPLEMENTATION.
               WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
     ENDIF.
 
+
     ev_new_trkorr = ls_new_trkorr-trkorr.
 
-    APPEND ls_new_trkorr-trkorr TO <ls_data>-t_new_trkorr.
+    <ls_data>-new_trkorr = ls_new_trkorr-trkorr.
 
     "Put tasks to transpot copies and release selected tasks
     LOOP AT lt_trkorr ASSIGNING <ls_req>.
@@ -642,7 +748,11 @@ CLASS gcl_alv IMPLEMENTATION.
                 WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
       ENDIF.
 
-      me->release( <ls_req>-trkorr ).
+      IF mv_release_task = abap_true.
+        me->release( <ls_req>-trkorr ).
+        "Exclude processed request
+        DELETE mt_requests WHERE trkorr = <ls_req>-trkorr.
+      ENDIF.
 
     ENDLOOP.
 
@@ -661,13 +771,16 @@ CLASS gcl_alv IMPLEMENTATION.
     DATA: ls_new_trkorr TYPE trwbo_request_header,
           lt_requests   TYPE trwbo_request_headers,
           ls_ranges     TYPE trsel_ts_ranges,
-          ls_requests   TYPE trwbo_request.
+          ls_requests   TYPE trwbo_request,
+          lv_like       TYPE string,
+          lt_trkorrs    TYPE trkorrs.
 
     FIELD-SYMBOLS: <ls_s4user>  TYPE trsel_trs_as4user,
                    <ls_trkorr>  TYPE trsel_trs_trkorr,
                    <ls_reqstt>  TYPE trsel_trs_status,
                    <ls_reqfun>  TYPE trsel_trs_function,
                    <ls_request> TYPE trwbo_request_header,
+                   <ls_requests> TYPE mts_requests,
                    <ls_objects> TYPE trwbo_s_e071,
                    <ls_data>    TYPE mts_data.
 
@@ -694,7 +807,7 @@ CLASS gcl_alv IMPLEMENTATION.
       EXPORTING
         iv_username_pattern    = sy-uname
       IMPORTING
-        et_requests            = mt_requests
+        et_requests            = lt_requests
       CHANGING
         cs_ranges              = ls_ranges
       EXCEPTIONS
@@ -705,14 +818,34 @@ CLASS gcl_alv IMPLEMENTATION.
               WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
     ENDIF.
 
-    LOOP AT mt_requests ASSIGNING <ls_request> WHERE trfunction = 'K'.
-      APPEND INITIAL LINE TO mt_data ASSIGNING <ls_data>.
-      MOVE-CORRESPONDING <ls_request> TO <ls_data>.
-      <ls_data>-cop = icon_create_copy.
-      <ls_data>-cpr = icon_transport.
-      <ls_data>-cri = icon_import_all_requests.
-      <ls_data>-iconrc = icon_led_inactive.
+    LOOP AT lt_requests ASSIGNING <ls_request>.
+
+      APPEND INITIAL LINE TO mt_requests ASSIGNING <ls_requests>.
+      MOVE-CORRESPONDING <ls_request> TO <ls_requests>.
+
+      CASE <ls_request>-trfunction.
+        WHEN 'K'.
+          APPEND INITIAL LINE TO mt_data ASSIGNING <ls_data>.
+          MOVE-CORRESPONDING <ls_request> TO <ls_data>.
+          <ls_data>-cop = icon_create_copy.
+          <ls_data>-cpr = icon_transport.
+          <ls_data>-cri = icon_import_all_requests.
+        WHEN 'S'.
+*          CHECK <ls_requests> IS ASSIGNED.
+*
+*          CONCATENATE <ls_request>-trkorr '%' INTO lv_like.
+*
+*          SELECT trkorr
+*            FROM e071
+*            APPENDING TABLE <ls_requests>-t_trkorr
+*            WHERE obj_name LIKE lv_like
+*              AND object = 'MERG'
+*              AND pgmid  = 'CORR'.
+
+      ENDCASE.
+
     ENDLOOP.
+
 
     SORT mt_data BY trkorr DESCENDING.
 
@@ -724,16 +857,7 @@ CLASS gcl_alv IMPLEMENTATION.
           ls_alv     TYPE zst_abap_alv_trcopy,
           ls_layout  TYPE lvc_s_layo,
           ls_variant TYPE disvariant.
-	
-	"zst_abap_alv_trcopy
-	"TRKORR	    TRKORR	        CHAR	20
-    "AS4USER	TR_AS4USER	    CHAR	12
-    "AS4TEXT	AS4TEXT	        CHAR	60
-    "COP	    ZED_ABAP_COP	CHAR	4
-    "CPR	    ZED_ABAP_CPR	CHAR	4
-    "CRI	    ZED_ABAP_CRI	CHAR	4
-    "ICONRC	    ZED_AVAP_ICONRC	CHAR	4
-	
+
     lt_fcat = create_fcat( ls_alv ).
 
     ls_variant-report = sy-repid.
@@ -801,16 +925,10 @@ CLASS gcl_alv IMPLEMENTATION.
       ENDIF.
 
       CASE <ls_fcat>-fieldname .
-        WHEN mcs_usr_cmd-cop.
+        WHEN mcs_usr_cmd-cop OR mcs_usr_cmd-cpr OR mcs_usr_cmd-cri.
           <ls_fcat>-icon = abap_true.
           <ls_fcat>-hotspot = abap_true.
-        WHEN mcs_usr_cmd-cpr.
-          <ls_fcat>-icon = abap_true.
-          <ls_fcat>-hotspot = abap_true.
-        WHEN mcs_usr_cmd-cri.
-          <ls_fcat>-icon = abap_true.
-          <ls_fcat>-hotspot = abap_true.
-        WHEN 'ICONRC'.
+        WHEN mcs_usr_cmd-irc.
           <ls_fcat>-icon = abap_true.
       ENDCASE.
 
@@ -829,19 +947,23 @@ CLASS gcl_alv IMPLEMENTATION.
 ENDCLASS.                    "gcl_alv IMPLEMENTATION
  
 SELECTION-SCREEN BEGIN OF BLOCK b1 WITH FRAME.
+PARAMETERS: p_trkorr  TYPE trkorr.
 
-PARAMETERS: p_trkorr TYPE trkorr.
-
+SELECTION-SCREEN SKIP.
+SELECTION-SCREEN BEGIN OF LINE.
+SELECTION-SCREEN: COMMENT 1(31) FOR FIELD p_reltsk.
+PARAMETER p_reltsk  TYPE flag DEFAULT abap_true.
+SELECTION-SCREEN END OF LINE.
 SELECTION-SCREEN END OF BLOCK b1.
 
 START-OF-SELECTION.
 
   CREATE OBJECT go_alv
     EXPORTING
-      iv_trkorr = p_trkorr.
+      iv_release_task = p_reltsk
+      iv_trkorr       = p_trkorr.
 
   go_alv->run( ).
-  
   
 
 
