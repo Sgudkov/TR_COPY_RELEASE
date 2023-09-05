@@ -9,7 +9,7 @@
 
 #### 1. Simple selection screen to choose transport request.
 
-![alt text](https://github.com/Sgudkov/TR_COPY_RELEASE/blob/main/SEL_SRC.jpg).
+![alt text](https://github.com/Sgudkov/TR_COPY_RELEASE/blob/main/SEL_SRC2.jpg).
 
 #### 2. Here how grid looks like.
 
